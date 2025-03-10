@@ -1,0 +1,208 @@
+---
+title: "Differences-in-Differences Analysis Assignment"
+author: "Your Name"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+## Introduction
+
+This document analyzes whether a free smoking cessation program provided by a hospital causes smokers to quit smoking. We use data from two hospitals in Salt Lake City:  
+- **Hospital A:** Implemented a free smoking cessation program (free counseling and medications) after enrolling some patients.  
+- **Hospital B:** Provides smoking cessation treatment but requires payment.
+
+The analysis includes:
+- Constructing a causal diagram.
+- Creating balancing tables for baseline covariates.
+- Examining the common trend and common shock assumptions.
+- Estimating a Difference-in-Differences (DID) model.
+- Visualizing time trends.
+- Testing for spillover effects.
+
+## Setup
+
+First, load the required libraries.
+
+```{r setup, message=FALSE, warning=FALSE}
+# Load required libraries
+library(readxl)      # For reading Excel files
+library(dplyr)       # For data manipulation
+library(tidyr)       # For reshaping data
+library(ggplot2)     # For plotting
+library(tableone)    # For creating balancing tables
+library(lmtest)      # For regression testing
+library(sandwich)    # For robust standard errors
+library(dagitty)     # For creating causal diagrams
+library(ggdag)  
+# For plotting DAGs
+```
+
+## 1. Causal Diagram
+
+Below is the causal diagram (DAG) representing the hypothesized relationships.  
+The diagram indicates that both hospital type and the timing of enrollment (pre/post intervention) may affect quitting, and that baseline covariates could confound the relationships.
+
+```{r causal-diagram, fig.width=7, fig.height=4}
+# Define the causal diagram
+dag_string <- "
+dag {
+  hospital -> QuitSmoking
+  post -> QuitSmoking
+  hospital_post -> QuitSmoking
+  Baseline -> hospital
+  Baseline -> QuitSmoking
+}
+"
+dag <- dagitty(dag_string)
+# Manually set coordinates for clarity
+coordinates(dag) <- list(
+  x = c(hospital = 0, Baseline = 1, post = 2, 'hospital:post' = 3, QuitSmoking = 4),
+  y = c(hospital = 0, Baseline = 1, post = 1, 'hospital:post' = 1, QuitSmoking = 0)
+)
+# Plot the DAG
+ggdag(dag, layout = "manual", text = FALSE) + 
+  theme_dag() +
+  ggtitle("Causal Diagram for Smoking Cessation Program")
+```
+
+## 2. Data Import
+
+Read the dataset. Ensure that the file **DID Dataset 3-13-23.xlsx** is in your working directory.
+
+```{r data-import}
+# Read the Excel dataset
+data <- read_excel("C:\\Users\\u1418987\\Downloads\\DID Dataset 3-13-23.xlsx")
+
+# Quick look at the data structure
+str(data)
+head(data)
+```
+
+## 3. Balancing Tables
+
+### a. Baseline Covariates by Hospital
+
+We compare the baseline (enrollment) characteristics between Hospital A (treated) and Hospital B (untreated). We assume that baseline covariates are all variables except for `hospital`, `qsmk_1yrs`, and `post`.
+
+```{r balancing-table-hospital}
+# Define baseline variables (exclude treatment/outcome variables)
+baseline_vars <- setdiff(names(data), c("hospital", "qsmk_1yrs", "post"))
+
+# Create a balancing table comparing baseline covariates by hospital
+table_hosp <- CreateTableOne(vars = baseline_vars, strata = "hospital", data = data, test = FALSE)
+print(table_hosp, smd = TRUE)  # SMDs help assess balance
+```
+
+### b. Baseline Covariates by Enrollment Time (Pre vs. Post Intervention)
+
+```{r balancing-table-post}
+table_post <- CreateTableOne(vars = baseline_vars, strata = "post", data = data, test = FALSE)
+print(table_post, smd = TRUE)
+```
+
+## 4. Common Trend Assumption
+
+The **common trends assumption** states that, in the absence of the intervention, the change in quit rates for Hospital A would have been similar to that of Hospital B. With only one pre-intervention period, we examine whether the control group (Hospital B) shows any significant change in quit rates from pre to post enrollment.
+
+```{r common-trend-assumption}
+# Filter data for Hospital B
+hospitalB <- data %>% filter(hospital == "B")
+common_trend_test <- t.test(qsmk_1yrs ~ post, data = hospitalB)
+print(common_trend_test)
+```
+
+## 5. Common Shock Assumption
+
+The **common shock assumption** implies that any external shocks (e.g., policy changes, economic factors) affect both hospitals similarly. Although this cannot be fully tested with the available data, comparing baseline characteristics and trends in Hospital B (as above) gives an indirect check.
+
+## 6. Quit Rates Table by Hospital & Time
+
+We create a table showing the proportion of patients who quit smoking at the 1-year follow-up by hospital and time period (pre vs. post intervention).
+
+```{r quit-rates-table}
+quit_rates <- data %>% 
+  group_by(hospital, post) %>% 
+  summarise(quit_rate = mean(qsmk_1yrs, na.rm = TRUE),
+            n = n()) %>%
+  ungroup()
+print(quit_rates)
+
+# Reshape the table for clarity (wide format)
+quit_rates_wide <- quit_rates %>%
+  pivot_wider(names_from = post, values_from = quit_rate, names_prefix = "post_")
+print(quit_rates_wide)
+```
+
+## 7. Difference-in-Differences Models
+
+Before estimating the models, convert `hospital` and `post` to factors.
+
+### a. Unadjusted DID Model
+
+```{r did-model-unadjusted}
+data <- data %>% 
+  mutate(hospital = factor(hospital),
+         post = factor(post))
+
+# Unadjusted DID model using an interaction term
+did_model <- lm(qsmk_1yrs ~ hospital * post, data = data)
+summary(did_model)
+```
+
+### b. Adjusted DID Model with Baseline Covariates
+
+We now include the baseline covariates to adjust for any potential confounders.
+
+```{r did-model-adjusted}
+covariate_formula <- paste(baseline_vars, collapse = " + ")
+did_model_adj <- lm(as.formula(paste("qsmk_1yrs ~ hospital * post +", covariate_formula)), data = data)
+summary(did_model_adj)
+```
+
+The key coefficient of interest is the interaction term (`hospital:post`), which represents the DID estimate of the program's effect.
+
+## 8. Time Trends Plot
+
+Visualize the 1-year quit rates over time by hospital.
+
+```{r time-trends-plot, fig.width=7, fig.height=5}
+ggplot(quit_rates, aes(x = as.numeric(as.character(post)), y = quit_rate, 
+                       group = hospital, color = hospital)) +
+  geom_line(size = 1) +
+  geom_point(size = 3) +
+  scale_x_continuous(breaks = c(0, 1), labels = c("Pre", "Post")) +
+  labs(x = "Time Period", y = "1-Year Quit Rate",
+       title = "Quit Rates by Hospital and Enrollment Period") +
+  theme_minimal()
+```
+
+## 9. Spillover Effects
+
+Spillover effects occur if the intervention in Hospital A indirectly affects Hospital B. One way to test for spillover is to assess whether Hospital B’s quit rate changed significantly from pre to post enrollment.
+
+```{r spillover-effects}
+spillover_test <- t.test(qsmk_1yrs ~ post, data = filter(data, hospital == "B"))
+print(spillover_test)
+```
+
+## Conclusion
+
+Conclusion
+
+Based on the analyses:
+
+Baseline Characteristics:
+The balancing tables indicate that there are some notable differences in baseline characteristics between patients from Hospital A and Hospital B. While many variables are fairly comparable, certain covariates (e.g., hbp, diabetes, hbpmed, bowel trouble) show large standardized mean differences. In contrast, when comparing patients enrolled before versus after the intervention, baseline differences appear to be much smaller. These findings suggest that while patient characteristics differ by hospital, the enrollment timing (pre/post intervention) is relatively balanced.
+
+Parallel Trends (Common Trend Assumption):
+The t-test on Hospital B (the control group) shows no statistically significant change in quit rates from pre to post intervention (p-value ≈ 0.62). This supports the parallel trends assumption, indicating that in the absence of the free smoking cessation program, Hospital B’s quit rates remained stable over time.
+
+Difference-in-Differences Estimates:
+
+The unadjusted DID model estimates that Hospital A’s quit rate increased by approximately 9.2 percentage points from pre to post intervention, whereas Hospital B’s increase was minimal (about 1.4 percentage points). The resulting DID estimate (interaction term) of roughly –7.8 percentage points is statistically significant (p ≈ 0.046), suggesting that the intervention is associated with a greater improvement in quit rates at Hospital A.
+The adjusted DID model, which controls for baseline covariates, yields a similar magnitude of effect (approximately –7.3 percentage points) with marginal statistical significance (p ≈ 0.068). This indicates that even after accounting for baseline differences, the free smoking cessation program appears to have had a positive impact on quit rates.
+Spillover Effects:
+The analysis for Hospital B (testing for spillover) shows no significant change in quit rates from pre to post (p ≈ 0.62). This suggests that the intervention did not indirectly affect Hospital B, lending further support to the validity of the DID design.
+
+Overall Summary:
+The free smoking cessation program at Hospital A is associated with a meaningful increase in the 1-year quit rate relative to Hospital B. The evidence points to an approximate 7–8 percentage point higher improvement in quitting among patients at Hospital A, after accounting for both the intervention period and baseline differences. Additionally, the key assumptions for DID—namely parallel trends and the absence of spillover effects—appear to be reasonably met, strengthening the credibility of the findings.
