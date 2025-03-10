@@ -37,33 +37,7 @@ library(ggdag)
 # For plotting DAGs
 ```
 
-## 1. Causal Diagram
 
-Below is the causal diagram (DAG) representing the hypothesized relationships.  
-The diagram indicates that both hospital type and the timing of enrollment (pre/post intervention) may affect quitting, and that baseline covariates could confound the relationships.
-
-```{r causal-diagram, fig.width=7, fig.height=4}
-# Define the causal diagram
-dag_string <- "
-dag {
-  hospital -> QuitSmoking
-  post -> QuitSmoking
-  hospital_post -> QuitSmoking
-  Baseline -> hospital
-  Baseline -> QuitSmoking
-}
-"
-dag <- dagitty(dag_string)
-# Manually set coordinates for clarity
-coordinates(dag) <- list(
-  x = c(hospital = 0, Baseline = 1, post = 2, 'hospital:post' = 3, QuitSmoking = 4),
-  y = c(hospital = 0, Baseline = 1, post = 1, 'hospital:post' = 1, QuitSmoking = 0)
-)
-# Plot the DAG
-ggdag(dag, layout = "manual", text = FALSE) + 
-  theme_dag() +
-  ggtitle("Causal Diagram for Smoking Cessation Program")
-```
 
 ## 2. Data Import
 
